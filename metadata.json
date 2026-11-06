@@ -1,0 +1,6 @@
+{
+  "name": "RailConnect – Railway Reservation Management System",
+  "description": "Full-stack railway reservation management system featuring relational database schema, train search, ticket booking, PNR tracking, simulated payment, and an admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
