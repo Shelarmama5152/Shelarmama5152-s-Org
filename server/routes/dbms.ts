@@ -387,7 +387,7 @@ dbmsRouter.get('/dbms/schema', async (_req: Request, res: Response): Promise<voi
 // GET /api/dbms/download-sql/:filename - Download SQL script
 dbmsRouter.get('/dbms/download-sql/:filename', (req: Request, res: Response): void => {
   const { filename } = req.params;
-  const allowed = ['RailwayDB.sql', 'seed.sql', 'queries.sql'];
+  const allowed = ['RailwayDB.sql', 'seed.sql', 'queries.sql', 'supabase_schema.sql'];
   if (!allowed.includes(filename)) {
     res.status(404).send('File not found.');
     return;

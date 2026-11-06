@@ -2,15 +2,51 @@ import initSqlJs, { Database } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
+import pg from 'pg';
+
+const { Pool } = pg;
 
 let dbInstance: Database | null = null;
+let pgPoolInstance: pg.Pool | null = null;
+let activeEngine: 'sqlite' | 'supabase' = 'sqlite';
+
 const DB_FILE = path.resolve(process.cwd(), 'data', 'railway.sqlite');
 
 export interface QueryResultRow {
   [key: string]: any;
 }
 
-export async function getDb(): Promise<Database> {
+// Convert SQLite '?' parameter placeholders to PostgreSQL '$1, $2, ...'
+function convertPlaceholdersToPg(sql: string): string {
+  let paramIndex = 1;
+  return sql.replace(/\?/g, () => `$${paramIndex++}`);
+}
+
+export async function getDb(): Promise<Database | pg.Pool> {
+  const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+
+  if (dbUrl && !pgPoolInstance) {
+    try {
+      console.log('Connecting to Supabase PostgreSQL database...');
+      const pool = new Pool({
+        connectionString: dbUrl,
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 5000,
+      });
+
+      // Test connection
+      const testRes = await pool.query('SELECT NOW() AS connected_time;');
+      console.log('Successfully connected to Supabase PostgreSQL! Server time:', testRes.rows[0]?.connected_time);
+      pgPoolInstance = pool;
+      activeEngine = 'supabase';
+      return pool;
+    } catch (err) {
+      console.warn('Failed to connect to Supabase PostgreSQL. Falling back to local SQLite engine.', err);
+      pgPoolInstance = null;
+      activeEngine = 'sqlite';
+    }
+  }
+
   if (dbInstance) return dbInstance;
 
   const SQL = await initSqlJs();
@@ -37,11 +73,12 @@ export async function getDb(): Promise<Database> {
   dbInstance = db;
   await initializeSchemaAndSeed(db);
   saveDb();
+  activeEngine = 'sqlite';
   return db;
 }
 
 export function saveDb(): void {
-  if (!dbInstance) return;
+  if (activeEngine !== 'sqlite' || !dbInstance) return;
   try {
     const data = dbInstance.export();
     const buffer = Buffer.from(data);
@@ -54,7 +91,15 @@ export function saveDb(): void {
 }
 
 export async function executeQuery(sql: string, params: any[] = []): Promise<QueryResultRow[]> {
-  const db = await getDb();
+  await getDb();
+
+  if (activeEngine === 'supabase' && pgPoolInstance) {
+    const pgSql = convertPlaceholdersToPg(sql);
+    const result = await pgPoolInstance.query(pgSql, params);
+    return result.rows;
+  }
+
+  const db = dbInstance!;
   const stmt = db.prepare(sql);
   if (params && params.length > 0) {
     stmt.bind(params);
@@ -73,7 +118,38 @@ export async function executeGet(sql: string, params: any[] = []): Promise<Query
 }
 
 export async function executeRun(sql: string, params: any[] = []): Promise<{ lastInsertId: number; changes: number }> {
-  const db = await getDb();
+  await getDb();
+
+  if (activeEngine === 'supabase' && pgPoolInstance) {
+    // For inserts, try to append RETURNING id if not present to capture generated key
+    let pgSql = convertPlaceholdersToPg(sql);
+    const isInsert = /^\s*INSERT\s+INTO/i.test(pgSql);
+    if (isInsert && !/RETURNING/i.test(pgSql)) {
+      pgSql += ' RETURNING *';
+    }
+
+    const result = await pgPoolInstance.query(pgSql, params);
+    const firstRow = result.rows[0];
+    let lastInsertId = 0;
+    if (firstRow) {
+      lastInsertId = Number(
+        firstRow.Booking_ID ||
+        firstRow.User_ID ||
+        firstRow.Train_ID ||
+        firstRow.Station_ID ||
+        firstRow.Stop_ID ||
+        firstRow.Passenger_ID ||
+        firstRow.Payment_ID ||
+        firstRow.Inventory_ID ||
+        firstRow.Fare_ID ||
+        firstRow.id ||
+        0
+      );
+    }
+    return { lastInsertId, changes: result.rowCount || 0 };
+  }
+
+  const db = dbInstance!;
   db.run(sql, params);
   const idResult = db.exec("SELECT last_insert_rowid() AS id, changes() AS changes;");
   const lastInsertId = idResult.length > 0 && idResult[0].values.length > 0 ? (idResult[0].values[0][0] as number) : 0;
@@ -83,7 +159,24 @@ export async function executeRun(sql: string, params: any[] = []): Promise<{ las
 }
 
 export async function executeTransaction<T>(work: () => Promise<T>): Promise<T> {
-  const db = await getDb();
+  await getDb();
+
+  if (activeEngine === 'supabase' && pgPoolInstance) {
+    const client = await pgPoolInstance.connect();
+    try {
+      await client.query('BEGIN;');
+      const result = await work();
+      await client.query('COMMIT;');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK;');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  const db = dbInstance!;
   db.run('BEGIN TRANSACTION;');
   try {
     const result = await work();

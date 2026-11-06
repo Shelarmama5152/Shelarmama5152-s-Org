@@ -125,6 +125,14 @@ export const DbmsConsole: React.FC = () => {
             <Download className="w-3.5 h-3.5" />
             <span>queries.sql</span>
           </a>
+          <a
+            href="/api/dbms/download-sql/supabase_schema.sql"
+            download="supabase_schema.sql"
+            className="px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg flex items-center gap-1.5 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Supabase.sql</span>
+          </a>
         </div>
       </div>
 
